@@ -1,0 +1,731 @@
+---
+title: "ST4248"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+    fig_caption: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r,eval=FALSE}
+png(file="mygraphic.png",width=400,height=350)
+plot(x=rnorm(10),y=rnorm(10),main="example")
+dev.off()
+```
+
+
+
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)      # tibble, tidyr, readr, purrr, dplyr, ggplot2
+library(kableExtra)     # table formatting, display
+library(rlist)          # working with list objects
+library(pROC)           # plotting of roc curve
+
+library(patchwork)      # visualisation
+library(corrplot)       # visualisation
+library(scales)         # visualisation
+library(RColorBrewer)   # visualisation
+library(ggdendro)       # visualisation
+library(ggrepel)        # visualisation
+library(ggforce)        # visualisation
+library(ggridges)       # visualisation
+library(gganimate)      # animations
+library(ggthemes)       # visualisation
+library(ggmap)          # visualisation of maps
+library(ggalt)          # visualisation of maps
+library(treemapify)     # visualisation of treemap
+
+
+# general data manipulation
+library(data.table)     # data table
+library(readr)          # input/output
+library(vroom)          # input/output
+library(stringr)        # string manipulation, %>%
+library(forcats)        # factor manipulation
+library(skimr)          # overview
+library(mltools)
+library(onehot)         # one hot encoding
+library(readxl)         # reading excel files
+
+library(class)          # knn model
+library(glmnet)
+library(leaps)
+library(pls)            # pcr model
+library(splines)        # splines model
+library(gam)            # gam model
+library(akima)          # gam model
+library(neuralnet)      # neural networks
+library(nnet)           # neural networks
+library(tree)           # classification trees
+library(randomForest)   # bagging and random forest
+library(gbm)            # boosting
+library(grplasso)
+
+library(caret)          # training models
+
+library(lubridate)      # date and time
+library(forecast)       # time series analysis
+library(prophet)        # time series analysis
+library(timetk)         # time series analysis
+
+
+library(alluvial)       # specific visualisation
+library(GGally)         # specific visualisation
+library(wesanderson)    # specific visualisation
+
+library(crosstalk)      # interactivity
+library(plotly)         # interactivity
+
+library(foreach)        # parallel
+library(doParallel)     # parallel
+```
+
+
+```{r helperfns}
+source("helper_fns.R")
+
+Mode <- function(x, na.rm = FALSE) {
+  if(na.rm) x <- x[!is.na(x)]
+  ux <- unique(x)
+  ux[which.max( tabulate(match(x, ux)) )]
+}
+
+drop_any_columns <- function(dataset, columns_to_drop) {
+  if(typeof(columns_to_drop) == "character"){
+    dataset[,!names(dataset) %in% columns_to_drop]
+  } else {
+    dataset[, -columns_to_drop]
+  }
+}
+
+peek_at_data <- function(dataset, head = 10) {
+  dataset %>% 
+    head(head) %>%
+    kableExtra::kable() %>%
+    kableExtra::kable_styling()
+}
+
+
+format_price <- function(datacolumn) {
+  if(TRUE %in% grepl("^\\$", datacolumn)){
+    as.numeric(gsub("\\$|\\,", "", datacolumn))
+  } else {
+    datacolumn
+  }
+}
+
+format_logical <- function(datacolumn) {
+  datacolumn %>% sapply(function(x) if(x == "f") FALSE else TRUE)
+}
+
+format_percent <- function(datacolumn) {
+  prox <- datacolumn %>% gsub("\\%", "", .) %>% 
+    gsub("N\\/A", NA, .) %>% as.numeric()
+  prox/100
+}
+
+impute.mean <- function(x) {
+  replace(x, is.na(x), mean(x, na.rm = TRUE))
+}
+```
+
+
+
+```{r dataset}
+#http://insideairbnb.com/get-the-data.html
+airbnb <- read.csv("../data/listings.csv")
+```
+
+```{r}
+yx_names <- c("host_since", "host_location", "host_response_time", 
+              "host_response_rate", "host_acceptance_rate", "host_is_superhost",
+              "host_neighbourhood", "host_total_listings_count", 
+              "host_has_profile_pic", "host_identity_verified",
+              "neighbourhood_group_cleansed", "is_location_exact",
+              "property_type", "room_type", "accommodates", "bathrooms", 
+              "bedrooms", "beds", "bed_type", "price", "security_deposit", 
+              "cleaning_fee", "guests_included", "extra_people", 
+              "minimum_nights", "maximum_nights", "availability_365", 
+              "number_of_reviews", "first_review", "last_review", 
+              "review_scores_rating", "review_scores_accuracy", 
+              "review_scores_cleanliness", "review_scores_checkin",
+              "review_scores_communication", "review_scores_location",
+              "review_scores_value", "instant_bookable", 
+              "is_business_travel_ready", "cancellation_policy",
+              "require_guest_profile_picture", 
+              "require_guest_phone_verification", "square_feet")        
+
+```
+
+
+```{r datacleaning}
+### cleaning the date
+airbnb$host_since <- as.Date(airbnb$host_since)
+airbnb$first_review <- as.Date(airbnb$first_review)
+airbnb$last_review <- as.Date(airbnb$last_review)
+
+### cleaning %
+airbnb$host_acceptance_rate <- format_percent(airbnb$host_acceptance_rate)
+airbnb$host_response_rate <- format_percent(airbnb$host_response_rate)
+
+### cleaning $
+airbnb$price <- format_price(airbnb$price)
+airbnb$weekly_price <- format_price(airbnb$weekly_price)
+airbnb$monthly_price <- format_price(airbnb$monthly_price)
+airbnb$security_deposit <- format_price(airbnb$security_deposit)
+airbnb$cleaning_fee <- format_price(airbnb$cleaning_fee)
+airbnb$extra_people <- format_price(airbnb$extra_people)
+
+### cleaning logical
+airbnb$require_guest_phone_verification <- format_logical(airbnb$require_guest_phone_verification)
+airbnb$instant_bookable <- format_logical(airbnb$instant_bookable)
+airbnb$is_business_travel_ready <- format_logical(airbnb$is_business_travel_ready)
+airbnb$require_guest_profile_picture <- format_logical(airbnb$require_guest_profile_picture)
+airbnb$has_availability <- format_logical(airbnb$has_availability)
+airbnb$is_location_exact <- format_logical(airbnb$is_location_exact)
+airbnb$host_has_profile_pic <- format_logical(airbnb$host_has_profile_pic)
+airbnb$host_identity_verified <- format_logical(airbnb$host_identity_verified)
+airbnb$host_is_superhost <- format_logical(airbnb$host_is_superhost)
+
+
+
+### dealing with NA / missing values
+airbnb$cleaning_fee[is.na(airbnb$cleaning_fee)] <- 0
+airbnb$security_deposit[is.na(airbnb$security_deposit)] <- 0
+
+airbnb$first_review[is.na(airbnb$first_review)] <- as.Date("2000-01-01")
+airbnb$last_review[is.na(airbnb$last_review)] <- as.Date("2000-01-01")
+
+airbnb$reviews_per_month[is.na(airbnb$reviews_per_month)] <- 0
+airbnb$review_scores_rating[is.na(airbnb$review_scores_rating)] <- 0
+airbnb$review_scores_accuracy[is.na(airbnb$review_scores_accuracy)] <- 0
+airbnb$review_scores_cleanliness[is.na(airbnb$review_scores_cleanliness)] <- 0
+airbnb$review_scores_checkin[is.na(airbnb$review_scores_checkin)] <- 0
+airbnb$review_scores_communication[is.na(airbnb$review_scores_communication)] <- 0
+airbnb$review_scores_location[is.na(airbnb$review_scores_location)] <- 0
+airbnb$review_scores_value[is.na(airbnb$review_scores_value)] <- 0
+
+
+airbnb <- airbnb %>% group_by(room_type) %>%
+    mutate(square_feet = impute.mean(square_feet))
+
+
+airbnb$bedrooms[is.na(airbnb$bedrooms)] <- 0
+airbnb$bathrooms[is.na(airbnb$bathrooms)] <- 0.5
+airbnb$beds[is.na(airbnb$beds)] <- 1
+
+
+
+
+### drop redundant columns
+columns_to_drop1 <- c("listing_url", "scrape_id", "last_scraped", "thumbnail_url",
+                     "medium_url","picture_url", "xl_picture_url", "host_url", 
+                     "host_thumbnail_url", "host_picture_url", "country_code", 
+                     "country", "license", "jurisdiction_names", "requires_license",
+                     "calendar_last_scraped", "space", "summary","description", 
+                     "experiences_offered", "notes", "neighborhood_overview", "transit",
+                     "access", "interaction", "house_rules","host_about")
+
+airbnb <- drop_any_columns(airbnb, columns_to_drop1)
+
+
+columns_to_drop2 <- c("state", "city", "amenities", "host_verifications", "zipcode", 
+                     "market", "smart_location", "street", "host_location", 
+                     "host_neighbourhood", "calendar_updated", "id", 
+                     "host_id", "host_name", "host_total_listings_count",
+                     "name", "host_response_time", "monthly_price", "weekly_price", 
+                     "host_since", "host_response_rate", "host_acceptance_rate",
+                     "host_listings_count", "latitude", "longitude", "neighbourhood", 
+                     "is_location_exact", "property_type", "neighbourhood_cleansed",
+                     "is_business_travel_ready")
+
+airbnb <- drop_any_columns(airbnb, columns_to_drop2)
+
+
+
+```
+
+
+```{r}
+## converting to factors
+airbnb$host_is_superhost <- as.factor(airbnb$host_is_superhost)
+airbnb$host_has_profile_pic <- as.factor(airbnb$host_has_profile_pic)
+airbnb$host_identity_verified <- as.factor(airbnb$host_identity_verified)
+airbnb$has_availability <- as.factor(airbnb$has_availability)
+airbnb$instant_bookable <- as.factor(airbnb$instant_bookable)
+airbnb$require_guest_profile_picture <- as.factor(airbnb$require_guest_profile_picture)
+airbnb$require_guest_phone_verification <- as.factor(airbnb$require_guest_phone_verification)
+```
+
+
+
+
+
+```{r}
+#peek_at_data(airbnb,head = 5)
+tibble::glimpse(airbnb)
+```
+
+
+```{r}
+# check for NA values
+apply(airbnb, 2, function(x) sum(is.na(x))) %>% base::Filter(function(x) x != 0, .)
+```
+
+
+```{r}
+## removing highly correlated variables
+d <- airbnb[,which(lapply(airbnb, class) == "numeric" | lapply(airbnb, class) == "integer")]
+d <- drop_any_columns(d, "price")
+f <- airbnb[, !names(airbnb) %in% names(d)]
+
+
+tmp <- cor(d)
+tmp[upper.tri(tmp)] <- 0
+diag(tmp) <- 0
+#tmp
+d_new <- d[ , !apply(tmp, 2, function(x) any(x > 0.95))] 
+
+airbnb <- bind_cols(d_new, f)
+airbnb <- data.table(airbnb)
+
+## removing price above 1000 due to potential outliers
+airbnb <- airbnb %>% dplyr::filter(price <=1000)
+```
+
+
+```{r}
+## splitting dataset into train and test
+split_data <- random_split_data(airbnb, 0.7, 1234)
+```
+
+
+
+```{r}
+## naive method 1: using the mean for each room type
+naive_mean <- aggregate(split_data$train$price, list(split_data$train$room_type), mean)
+split_data$test$room_type
+
+split_data$test %>%
+  group_by(room_type) %>%
+  mutate(yhatt = function(xx) if(xx == "Entire home/apt") naive_mean$x[1]
+         else if (xx == "Hotel room") naive_mean$x[2] 
+         else if (xx == "Private room") naive_mean$x[3]
+         else naive_mean$x[4])
+
+yhat_mean <- seq(nrow(split_data$test))
+yhat_mean <- sapply(yhat_mean, function(xx) if(split_data$test$room_type[xx] == "Entire home/apt") naive_mean$x[1]
+         else if (split_data$test$room_type[xx] == "Hotel room") naive_mean$x[2] 
+         else if (split_data$test$room_type[xx] == "Private room") naive_mean$x[3]
+         else naive_mean$x[4])
+testmse_mean_room <- MSE(split_data$test$price, yhat_mean)
+
+
+## naive method 2: using overall mean
+yhat_mean2 <- mean(split_data$train$price)
+testmse_mean_overall <- MSE(split_data$test$price, rep(yhat_mean2, nrow(split_data$test)))
+```
+
+## Ordinary Least Squares
+```{r ols}
+lm_final <- glm(price ~ ., data = split_data$train)
+yhat_lm <- predict(lm_final, newdata = split_data$test)
+testmse_ols <- MSE(split_data$test$price, yhat_lm)
+```
+
+
+## Stepwise Selection
+```{r}
+null.model <- glm(price ~ 1, data = split_data$train)
+
+s1m1 <- step(null.model, data = train, scope=list(upper=lm_final, lower=null.model), direction="both", k=2, test="F")
+yhat_s1m1 <- predict(s1m1, newdata = split_data$test)
+testmse_step <- MSE(split_data$test$price, yhat_s1m1)
+```
+
+## LASSO Regression
+```{r lasso}
+x_train <- model.matrix(price ~ ., data = split_data$train)[,-1]
+y_train <- split_data$train$price
+x_test <- model.matrix(price ~ ., data = split_data$test)[,-1]
+
+
+set.seed(1)
+grid <- 10^seq(1, -2, length = 100)
+lasso_mod <- glmnet::glmnet(x_train, y_train, alpha = 1, lambda = grid)
+#plot(lasso_mod)
+
+cv_out <- glmnet::cv.glmnet(x_train, y_train, alpha = 1)
+#plot(cv_out)
+lassobestlam <- cv_out$lambda.min
+
+
+
+
+lassocoef <- predict(lasso_mod, type = "coefficients", s = lassobestlam)[1:51,]
+lassocoef[lassocoef!=0]
+
+lasso_pred <- predict(lasso_mod, s = lassobestlam, newx = x_test)
+testmse_lasso <- MSE(split_data$test$price, lasso_pred)
+```
+
+## Group LASSO
+
+
+## PLSR Model
+```{r plsr}
+pls_fit <- pls::plsr(price ~ ., data = split_data$train, 
+                     validation = "CV")
+#summary(pls_fit)
+validationplot(object = pls_fit, val.type = "MSEP")
+
+M <- 20
+plsr_pred <- predict(pls_fit, split_data$test, ncomp = M)
+testmse_plsr <- MSE(split_data$test$price, plsr_pred)
+```
+
+
+
+
+
+
+## Regression Tree
+```{r reg_tree}
+reg_tree <- tree::tree(price ~ . - first_review - last_review, data = split_data$train)
+reg_tree_summary <- summary(reg_tree)
+yhat_reg <- predict(reg_tree, newdata = split_data$test)
+testmse_reg_tree <- MSE(yhat_reg, split_data$test$price)
+```
+
+
+```{r}
+cv_reg_tree <- cv.tree(reg_tree)
+plot(cv_reg_tree$size, cv_reg_tree$dev, type='b', xlab = "Tree Size", ylab = "Deviance")
+pruned_reg_tree <- prune.tree(reg_tree, best = 5)
+yhat_reg_pr <- predict(pruned_reg_tree, newdata = split_data$test)
+testmse_reg_tree_pr <- MSE(split_data$test$price, yhat_reg_pr)
+```
+
+
+## KRR
+```{r}
+x_krr <- model.matrix(price ~ . - first_review - last_review - 
+                        cancellation_policy - bed_type - calculated_host_listings_count_entire_homes -
+                        calculated_host_listings_count_private_rooms - calculated_host_listings_count_shared_rooms -
+                        require_guest_profile_picture - minimum_minimum_nights - maximum_minimum_nights -
+                        minimum_nights_avg_ntm - maximum_nights_avg_ntm ,
+                      data = split_data$train)[,-1]
+
+grp1 <- split_data$train %>% dplyr::filter(neighbourhood_group_cleansed == "Brooklyn")
+grp2 <- split_data$train %>% dplyr::filter(neighbourhood_group_cleansed == "Manhattan")
+grp3 <- split_data$train %>% dplyr::filter(neighbourhood_group_cleansed == "Bronx")
+grp4 <- split_data$train %>% dplyr::filter(neighbourhood_group_cleansed == "Queens")
+grp5 <- split_data$train %>% dplyr::filter(neighbourhood_group_cleansed == "Staten Island")
+
+x_test <- model.matrix(price ~ . - first_review - last_review - 
+                        cancellation_policy - bed_type - calculated_host_listings_count_entire_homes -
+                        calculated_host_listings_count_private_rooms - calculated_host_listings_count_shared_rooms -
+                        require_guest_profile_picture - minimum_minimum_nights - maximum_minimum_nights -
+                        minimum_nights_avg_ntm - maximum_nights_avg_ntm ,
+                       data = split_data$test)[,-1]
+
+
+x_krr5 <- model.matrix(price ~ . - first_review - last_review - 
+                        cancellation_policy - bed_type - calculated_host_listings_count_entire_homes -
+                        calculated_host_listings_count_private_rooms - calculated_host_listings_count_shared_rooms -
+                        require_guest_profile_picture - minimum_minimum_nights - maximum_minimum_nights -
+                        minimum_nights_avg_ntm - maximum_nights_avg_ntm ,
+                      data = grp5)[,-1]
+
+y_train5 <- grp5$price
+
+grptt1 <- split_data$test %>% dplyr::filter(neighbourhood_group_cleansed == "Brooklyn")
+grptt2 <- split_data$test %>% dplyr::filter(neighbourhood_group_cleansed == "Manhattan")
+grptt3 <- split_data$test %>% dplyr::filter(neighbourhood_group_cleansed == "Bronx")
+grptt4 <- split_data$test %>% dplyr::filter(neighbourhood_group_cleansed == "Queens")
+grptt5 <- split_data$test %>% dplyr::filter(neighbourhood_group_cleansed == "Staten Island")
+
+x_test5 <- model.matrix(price ~ . - first_review - last_review - 
+                        cancellation_policy - bed_type - calculated_host_listings_count_entire_homes -
+                        calculated_host_listings_count_private_rooms - calculated_host_listings_count_shared_rooms -
+                        require_guest_profile_picture - minimum_minimum_nights - maximum_minimum_nights -
+                        minimum_nights_avg_ntm - maximum_nights_avg_ntm ,
+                       data = grptt5)[,-1]
+
+y_test5 <- grptt5$price
+
+
+
+## random search
+set.seed(1)
+randomgrid_li <- c(5, 5) # sigma, lambda
+initiate_li <- rkhs_gCV(x_krr5, y_train5, gaussian_kernel, randomgrid_li[1], randomgrid_li[2])
+nruns_li <- 1000
+rkhs_storage_random_li <- matrix(nrow = nruns_li, ncol = 3)
+rkhs_storage_random_li[1, ] <- c(randomgrid_li, initiate_li)
+decay <- 5
+
+starttime2 <- Sys.time()
+for(i in seq(nruns_li)[-1]){
+  test_li <- randomgrid_li + c(runif(1,-1, 1)*decay, runif(1,-1,1))
+  while(TRUE %in% (test_li<0)) {
+    test_li <- randomgrid_li + c(runif(1,-1, 1)*decay, runif(1,-1,1))
+  }
+  prox_li <- rkhs_gCV(x_krr5, y_train5,gaussian_kernel, test_li[1], test_li[2])
+  #if(abs(prox_li - initiate_li) < 10^-6) {
+  #  break()
+  #}
+  if(prox_li < initiate_li){
+    initiate_li <- prox_li
+    randomgrid_li <- test_li
+  }
+  rkhs_storage_random_li[i,] <- c(randomgrid_li, initiate_li)
+  if(i %% 200 == 0) {
+    cat("Iteration completed:", i, "\n")
+    decay <- decay/2
+  }
+}
+endtime2 <- Sys.time()
+endtime2 - starttime2
+
+
+
+gcv_rkhs_opt_li <- rkhs_storage_random_li[nrow(rkhs_storage_random_li), 3]
+rkhs_param_opt_li <- rkhs_storage_random_li[nrow(rkhs_storage_random_li), 1:2]
+sigma_rkhs_opt_li <- rkhs_param_opt_li[1]
+lambda_rkhs_opt_li <- rkhs_param_opt_li[2]
+
+
+#grptt5_pred <- rkhs_estimator(x_test5, x_test5, y_test5, gaussian_kernel, lambda_rkhs_opt_li, sigma_rkhs_opt_li) 
+#MSE(y_test5, grptt5_pred)
+
+
+```
+
+
+
+## Random Forest (mtry = 10)
+```{r}
+set.seed(1)
+#ntrees <- seq(500, 1, length = 11)
+ntrees <- c(1, 10, 20)
+
+storage_mse <- numeric(length(ntrees))
+storage_model <- list()
+for(i in seq(length(ntrees))){
+  bag <- randomForest(price ~ ., data = split_data$train, mtry = 10, importance=TRUE, ntree=ntrees[i])
+  yhat_bag <- predict(bag, newdata = split_data$test)
+  
+  testmse_bag <- MSE(split_data$test$price, yhat_bag)
+  storage_model <- c(storage_model, list(bag))
+  storage_mse[i] <- testmse_bag
+  cat("Done with tree size: ", ntrees[i], "\n")
+}
+storage_mse
+```
+
+
+
+
+```{r}
+plot(ntrees, storage_mse, type = "l", xlab = "Number of trees", ylab="Test MSE", lwd=2, col="navy")
+```
+
+
+
+
+
+## GAM
+
+
+
+## Regression Splines
+
+
+
+
+
+
+
+
+
+
+```{r}
+reg_fit_fwd <- leaps::regsubsets(price ~ ., data=split_data$train, nvmax=100, method = "forward")
+reg_summary_fwd <- summary(reg_fit_fwd)
+```
+
+
+```{r,fig.width=10,fig.height=5,fig.align='center',fig.pos="H",fig.cap="Summary plots"}
+par(mfrow = c(2, 2))
+
+# Adjusted R^2
+plot(reg_summary_fwd$adjr2, xlab = "Number of Variables", ylab = "Adjusted RSq", type = "l")
+max_Rsq_fwd <- which.max(reg_summary_fwd$adjr2)
+points(max_Rsq_fwd, reg_summary_fwd$adjr2[max_Rsq_fwd], col = "red", cex = 2, pch = 20)
+
+# Cp
+plot(reg_summary_fwd$cp, xlab = "Number of Variables", ylab = "Cp", type = 'l')
+min_Cp_fwd <- which.min(reg_summary_fwd$cp)
+points(min_Cp_fwd, reg_summary_fwd$cp[min_Cp_fwd], col = "red", cex = 2, pch = 20)
+
+# BIC
+plot(reg_summary_fwd$bic, xlab = "Number of Variables", ylab = "BIC", type = 'l')
+min_BIC_fwd <- which.min(reg_summary_fwd$bic)
+points(min_BIC_fwd, reg_summary_fwd$bic[min_BIC_fwd], col = "red", cex = 2, pch = 20)
+
+# RSS
+plot(reg_summary_fwd$rss, xlab = "Number of Variables", ylab = "RSS", type = 'l')
+min_rss_fwd <- which.min(reg_summary_fwd$rss)
+points(min_rss_fwd, reg_summary_fwd$rss[min_rss_fwd], col = "red", cex = 2, pch = 20)
+
+
+coef(reg_fit_fwd, max_Rsq_fwd)
+coef(reg_fit_fwd, min_Cp_fwd)
+coef(reg_fit_fwd, min_BIC_fwd)
+coef(reg_fit_fwd, min_rss_fwd)
+
+```
+
+
+## PCA
+```{r}
+d <- airbnb[,which(lapply(airbnb, class) == "numeric" | lapply(airbnb, class) == "integer")]
+d <- drop_any_columns(d, "price")
+pr_out <- prcomp(d, scale. = TRUE)
+```
+
+
+```{r}
+#pr_out
+#pr_out$sdev
+pr_var <- pr_out$sdev^2
+pve <- pr_var/sum(pr_var)
+
+
+biplot(pr_out, scale = 0)
+
+plot(pve, xlab="Principal Component", ylab="Proportion of Variance Explained", ylim=c(0,1),type="b")
+
+plot(cumsum(pve), xlab="Principal Component", ylab="Cumulative Proportion of Variance Explained", ylim=c(0,1),type="b")
+abline(h=0.8)
+
+pve[1:10]
+pr_out[1:10]
+```
+
+
+
+```{r}
+#============================================================================================
+```
+
+
+```{r gam}
+
+gam1 <- gam(Outstate ~ Private + s(Apps, 3) + s(Accept, 3) + s(Top10perc, 3) +
+              s(F.Undergrad,3) + s(Room.Board, 3) + s(Personal, 3) + s(PhD, 3)+
+              s(S.F.Ratio, 3) + s(perc.alumni, 3) + s(Expend, 3) + s(Grad.Rate, 3),
+            data = train_set)
+yhat <- predict(gam1, newdata = test_set[,!(names(test_set) %in% "Outstate")])
+
+```
+
+
+```{r ridge_regression}
+
+grid <- 10^seq(10, -2, length = 100)
+ridge_mod <- glmnet::glmnet(x_train, y_train, alpha = 0, lambda = grid)
+
+# CV to find best lambda
+cv_out <- glmnet::cv.glmnet(x_train, y_train, alpha = 0, nfolds = 10)
+#plot(cv_out)
+ridgebestlam <- cv_out$lambda.min
+
+
+ridge_pred <- predict(ridge_mod, s = ridgebestlam, newx = x_test, thresh = 1e-16)
+ridgetestmse <- MSE(ridge_pred, y_test)
+
+# full model
+out <- glmnet(x, y, alpha = 0)
+ridgecoef <- predict(out, type = "coefficients", s = ridgebestlam)[1:14,]
+ridgecoef[ridgecoef!=0]
+
+```
+
+
+
+
+```{r pcr}
+
+pcr_fit <- pls::pcr(crim ~ ., data = data, scale = TRUE, 
+                    validation = "CV", subset = train_index)
+#summary(pcr_fit)
+validationplot(object = pcr_fit, val.type = "MSEP")
+
+M <- 9
+pcr_pred <- predict(pcr_fit, x_test, ncomp = M)
+pcrtestmse <- MSE(pcr_pred, y_test)
+out <- pcr(y ~ x, scale = TRUE, ncomp = M)
+summary(out)
+
+```
+
+
+
+
+
+
+```{r regsubset}
+
+k <- 10
+set.seed(12345)
+folds <- sample(1:k, nrow(data), replace = TRUE)
+#table(folds)
+cv_errors <- matrix(NA, k, 13, dimnames = list(NULL, paste(1:13)))
+for(j in 1:k){
+  best_fit <- regsubsets(crim ~., data = data[folds!=j, ], nvmax=13)
+  for(i in 1:13){
+    pred <- predict(best_fit, data[folds==j,], id = i)
+    cv_errors[j, i] <- MSE(pred, data$crim[folds==j]) 
+  }
+}
+mean_cv_errors <- apply(cv_errors, 2, mean)
+min_cv_error <- which.min(mean_cv_errors)
+plot(mean_cv_errors, type = 'b')
+
+
+reg_best <- regsubsets(crim ~ ., data = data[train_index,], nvmax = 13)
+best_pred <- predict(reg_best, data[-train_index,], id = min_cv_error)
+bestsubsetmse <- MSE(best_pred, y_test)
+
+reg_best <- regsubsets(crim ~ ., data = data, nvmax = 13)
+coef(reg_best, min_cv_error)
+
+
+
+```
+
+
+
+
+
+## Random forest, neural networks
+
+```{r neuralnet}
+
+
+```
+
+
+```{r}
+
+```
+
+
+
